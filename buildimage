@@ -1,0 +1,10 @@
+#!/bin/bash
+
+cd `dirname $0`
+BASE=`pwd`
+cd - >> /dev/null
+
+#echo "You don't need to run me anymore. Execute ${BASE}/run instead."
+#exit 1
+
+docker build --rm -t dynatracevisitflow .

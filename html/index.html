@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<!-- Adapted from http://bl.ocks.org/d3noob/c2637e28b79fb3bfea13 -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>User Flow Report</title>
+<style>
+
+.node rect {
+  cursor: move;
+  fill-opacity: .6;
+  shape-rendering: crispEdges;
+}
+
+.node text {
+  pointer-events: none;
+  text-shadow: 0 1px 0 #fff;
+}
+
+.link {
+  fill: none;
+  stroke: #000;
+  stroke-opacity: .2;
+}
+
+.link:hover {
+  stroke-opacity: .5;
+}
+
+
+body {
+  font-family: "PT Sans", sans-serif;
+  font-size: small;
+}
+</style>
+<link rel="stylesheet" href="js/jquery-ui-1.11.4.custom/jquery-ui.min.css">
+<script src="js/jquery-1.12.1.min.js"></script>
+<script src="js/jquery-ui-1.11.4.custom/jquery-ui.min.js"></script>
+</head>
+<body>
+<h2>User Flow Report</h2>
+<div data-role="page" id="loading">
+	<div data-role="content">
+		<center><img src="images/ajax-loader.gif"></center>
+	</div>
+</div>
+<div data-role="page" id="report">
+	<div data-role="content">
+		<table border=0 width="100%">
+			<tr>
+				<td>
+					Max Children
+					<input type="text" id="maxchildren" size=3 value="5">
+					Link Value Threshold
+					<input type="text" id="linkvaluethreshold" size=5 value="10">
+					Visit Count in Node Labels
+					<input type="checkbox" id="visitsinnodelabels">
+					<button type="button" id="refreshbutton">Refresh</button>
+				</td>
+			</tr>
+		</table>
+		
+		<p id="chart">
+	</div>
+</div>
+
+<script src="js/d3.v3.min.js"></script>
+<script src="js/sankey.js"></script>
+<script>
+var pageWidth = 1800;
+var pageHeight = 900;
+var units = "visitors";
+
+$(document).ready(function()
+{
+	$('#refreshbutton').click(loadData);
+	$('#visitsinnodelabels').click(changeLabels);
+	loadData();
+});
+
+function changeLabels()
+{
+	d3.selectAll(".node").select("text").text(nodeLabel);
+}
+
+function nodeLabel(d)
+{
+	var label = d.name;
+	if ($('#visitsinnodelabels').prop('checked'))
+		label += " (" + format(d.value) + ")";
+	return label;
+}
+
+function nodeTooltip(d)
+{
+	return d.name + " (" + format(d.value) + ")";
+}
+
+var margin = {top: 10, right: 10, bottom: 10, left: 10},
+    width = pageWidth - margin.left - margin.right,
+    height = pageHeight - margin.top - margin.bottom;
+
+var formatNumber = d3.format(",.0f"),    // zero decimal places
+    format = function(d) { return formatNumber(d) + " " + units; },
+	// blue to violet to orange to yellow
+    color = d3.scale.quantize()
+		.range(["#0b008a", "#4600a2", "#7500ab", "#9d189d", "#bf3984",
+				"#da5a6a", "#ef7c51", "#fca338", "#fcce25", "#f0f921"]);
+
+// append the svg canvas to the page
+var svg = d3.select("#chart").append("svg")
+    .attr("width", width + margin.left + margin.right)
+    .attr("height", height + margin.top + margin.bottom)
+  .append("g")
+    .attr("transform", 
+          "translate(" + margin.left + "," + margin.top + ")");
+
+// Set the sankey diagram properties
+var sankey = d3.sankey()
+    .nodeWidth(18)
+    .nodePadding(40)
+    .size([width, height]);
+
+var path = sankey.link();
+
+// load the data
+function loadData() {
+  $('#resultscount').html("");
+  $('#loading').prop('hidden', false);
+  $('#report').prop('hidden', true);
+
+  d3.selectAll(".node").remove();
+  d3.selectAll(".link").remove();
+  d3.selectAll("path").remove();
+
+d3.json("/api?maxchildren="
+		+ encodeURI($('#maxchildren').val())
+		+ "&linkvaluethreshold="
+		+ encodeURI($('#linkvaluethreshold').val()),
+function(error, graph) {
+
+  $('#loading').prop('hidden', true);
+  $('#report').prop('hidden', false);
+
+  if (error != null) {
+    alert("Error loading JSON: " + error);
+	return;
+  }
+
+  if (graph.error != null) {
+    alert("Error while executing search: " + graph.error);
+	return;
+  }
+
+  if (graph.nodes.length < 2) {
+	alert("No data");
+  	return;
+  }
+
+  sankey
+      .nodes(graph.nodes)
+      .links(graph.links)
+      .layout(32);
+
+// add in the links
+  var link = svg.append("g").selectAll(".link")
+      .data(graph.links)
+    .enter().append("path")
+      .attr("class", "link")
+      .attr("d", path)
+      .style("stroke-width", function(d) { return Math.max(1, d.dy); })
+      .sort(function(a, b) { return b.dy - a.dy; });
+
+// add the link titles
+  link.append("title")
+        .text(function(d) {
+    		return d.source.name + " → " + 
+                d.target.name + "\n" + format(d.value); });
+
+// add in the nodes
+  var node = svg.append("g").selectAll(".node")
+      .data(graph.nodes)
+    .enter().append("g")
+      .attr("class", "node")
+      .attr("transform", function(d) { 
+		  return "translate(" + d.x + "," + d.y + ")"; })
+    .call(d3.behavior.drag()
+      .origin(function(d) { return d; })
+      .on("dragstart", function() { 
+		  this.parentNode.appendChild(this); })
+      .on("drag", dragmove));
+
+  //node.selectAll(".node").on("click", click);
+
+// We need to track the min and max height of the rectangles because we want
+// to vary the colors of the rectangles according to their height.
+  var minNodeHeight = 9999;
+  var maxNodeHeight = 0;
+
+// add the rectangles for the nodes
+  node.append("rect")
+      .attr("height", function(d) {
+		minNodeHeight = Math.min(minNodeHeight, d.dy);
+		maxNodeHeight = Math.max(maxNodeHeight, d.dy);
+	  	return d.dy;
+	  })
+      .attr("width", sankey.nodeWidth())
+      .style("stroke", function(d) { return d3.rgb(d.color).darker(2); })
+    .append("title")
+      .text(nodeTooltip);
+
+// use blue for smaller nodes, yellow for hot nodes
+  color.domain([minNodeHeight, maxNodeHeight]);
+
+  node.selectAll("rect")
+      .style("fill", function(d) { return d.color = color(d.dy); })
+
+// add in the title for the nodes
+  node.append("text")
+      .attr("x", -6)
+      .attr("y", function(d) { return d.dy / 2; })
+      .attr("dy", ".35em")
+      .attr("text-anchor", "end")
+      .attr("transform", null)
+      .text(nodeLabel)
+    .filter(function(d) { return d.x < width / 2; })
+      .attr("x", 6 + sankey.nodeWidth())
+      .attr("text-anchor", "start");
+
+// the function for moving the nodes
+  function dragmove(d) {
+    d3.select(this).attr("transform", 
+        "translate(" + d.x + "," + (
+                d.y = Math.max(0, Math.min(height - d.dy, d3.event.y))
+            ) + ")");
+    sankey.relayout();
+    link.attr("d", path);
+  }
+});
+}
+</script>
+
+</body>
+</html>
